@@ -1,8 +1,8 @@
 import os
 
-os.environ['XLA_FLAGS'] = '--xla_gpu_enable_while_loop_double_buffering=false --xla_gpu_enable_custom_fusions=false --xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_enable_highest_priority_async_stream=true --xla_gpu_threshold_for_windowed_einsum_mib=0 --xla_gpu_multi_streamed_windowed_einsum=true --xla_gpu_graph_enable_concurrent_region=false --xla_gpu_use_memcpy_local_p2p=false --xla_gpu_enable_address_computation_fusion=false'
+os.environ['XLA_FLAGS'] = '--xla_gpu_enable_while_loop_double_buffering=false --xla_gpu_enable_custom_fusions=false --xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_enable_highest_priority_async_stream=true --xla_gpu_threshold_for_windowed_einsum_mib=1000000 --xla_gpu_multi_streamed_windowed_einsum=true --xla_gpu_graph_enable_concurrent_region=false --xla_gpu_graph_min_graph_size=200 --xla_gpu_enable_cublaslt=false --xla_gpu_use_memcpy_local_p2p=false --xla_gpu_enable_address_computation_fusion=false'
 
-os.environ['XLA_FLAGS'] += '  --xla_dump_disable_metadata=true --xla_dump_module_metadata=false --xla_dump_hlo_pass_re=.* --xla_dump_hlo_as_text --xla_dump_to=/workspace/collective_matmul_fp8/'
+os.environ['XLA_FLAGS'] += '  --xla_dump_disable_metadata=true --xla_dump_module_metadata=false --xla_dump_hlo_pass_re=.* --xla_dump_hlo_as_text --xla_dump_hlo_as_html --xla_dump_to=/workspace/collective_matmul_fp8_ag/'
 
 import argparse
 from functools import partial
@@ -20,19 +20,14 @@ with_sharding_constraint = nn_partitioning.with_sharding_constraint
 
 def test_fn(input, weight1, weight2):
     def matmul_fp8(A, B):
-        # Use scaling factors from last step.
-        A_scale = 1.0 
-        B_scale = 1.0 
-
-        # Quantization: Convert to FP8.
-        A_fp8 = (A / A_scale).astype(jnp.float8_e4m3fn)
-        B_fp8 = (B / B_scale).astype(jnp.float8_e4m3fn)
-
-        # Dequantization: Up-cast from FP8 to a wider type.
-        # Delayed Scaling: Calculate the scaling factors, which are always stored in wider types.
         E4M3_MAX = jnp.finfo(jnp.float8_e4m3fn).max.astype(jnp.float16)
         a_scale = jnp.max(jnp.abs(A)) / E4M3_MAX
         b_scale = jnp.max(jnp.abs(B)) / E4M3_MAX
+
+        # Quantization: Convert to FP8.
+        A_fp8 = (A / a_scale).astype(jnp.float8_e4m3fn)
+        B_fp8 = (B / b_scale).astype(jnp.float8_e4m3fn)
+
 
         a = A_fp8.astype(jnp.bfloat16) * a_scale
         b = B_fp8.astype(jnp.bfloat16) * b_scale
@@ -43,6 +38,7 @@ def test_fn(input, weight1, weight2):
     out = with_sharding_constraint(out, ('batch', 'seq_ag', 'mlp'))
     # RS+GEMM pattern, not using it for now
     # out = out @ weight2
+    out = matmul_fp8(out, weight2)
     return out
 
 def main():
