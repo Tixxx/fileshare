@@ -9,7 +9,7 @@ from jax.experimental.pjit import pjit
 from jax.experimental.shard_map import shard_map
 
 import os
-os.environ['XLA_FLAGS'] = '--xla_gpu_threshold_for_windowed_einsum_mib=0 '
+os.environ['XLA_FLAGS'] = '--xla_gpu_threshold_for_windowed_einsum_mib=0 --xla_gpu_use_memcpy_local_p2p=true '
 os.environ['XLA_FLAGS'] += ' --xla_dump_hlo_as_text --xla_dump_to=/workspace/cm_repro'
 
 with_sharding_constraint = nn_partitioning.with_sharding_constraint
