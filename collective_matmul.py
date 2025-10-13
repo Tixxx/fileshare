@@ -1,3 +1,4 @@
+# run with python collective_matmul.py --dp=1 --tp=8
 import argparse
 from functools import partial
 import numpy as np
