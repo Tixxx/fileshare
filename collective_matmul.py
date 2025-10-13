@@ -8,11 +8,13 @@ from jax.sharding import Mesh, PartitionSpec
 from jax.experimental.pjit import pjit
 from jax.experimental.shard_map import shard_map
 
-import datetime
+import os
+os.environ['XLA_FLAGS'] = '--xla_gpu_threshold_for_windowed_einsum_mib=0 '
+os.environ['XLA_FLAGS'] += ' --xla_dump_hlo_as_text --xla_dump_to=/workspace/cm_repro'
 
 with_sharding_constraint = nn_partitioning.with_sharding_constraint
 
-def test_fn(input, weight1, weight2):
+def test_fn(tp_overlap, input, weight1, weight2):
     out = input @ weight1
     out = with_sharding_constraint(out, ('batch', 'seq_ag', 'mlp'))
     out = out @ weight2
@@ -25,6 +27,7 @@ def main():
     parser.add_argument("--batch_size", dest="batch_size", type=int, default=2)
     parser.add_argument("--seq_len", dest="seq_len", type=int, default=2048)
     parser.add_argument("--hidden_size", dest="hidden_size", type=int, default=12288)
+    parser.add_argument("--no_tp_overlap", dest="tp_overlap", action="store_false")
     parser.add_argument("--profile", action="store_true")
     args = parser.parse_args()
 
@@ -37,14 +40,14 @@ def main():
     key = jax.random.PRNGKey(0)
     key1, key2 = jax.random.split(key, 2)
     input = jax.random.uniform(key2, (args.batch_size, args.seq_len, args.hidden_size), dtype=dtype)
-    weight1 = jax.random.uniform(key2, (args.hidden_size, args.tp*args.hidden_size), dtype=dtype)
-    weight2 = jax.random.uniform(key2, (args.tp*args.hidden_size, args.hidden_size), dtype=dtype)
+    weight1 = jax.random.uniform(key2, (args.hidden_size, 4*args.hidden_size), dtype=dtype)
+    weight2 = jax.random.uniform(key2, (4*args.hidden_size, args.hidden_size), dtype=dtype)
 
     mesh_shape = {'dp': args.dp, 'tp': args.tp}
     mesh = Mesh(np.array(jax.devices()).reshape(tuple(mesh_shape.values())), tuple(mesh_shape.keys()))
     logical_axis_rules = (('batch', 'dp'), ('seq_rs', 'tp'), ('seq_ag', None), ('emb', None), ('mlp', 'tp'))
 
-    pjitted_test_fn = pjit(partial(test_fn), out_shardings=PartitionSpec('dp', 'tp', None))
+    pjitted_test_fn = pjit(partial(test_fn, args.tp_overlap), out_shardings=PartitionSpec('dp', 'tp', None))
 
     if args.profile:
         import ctypes
@@ -65,14 +68,6 @@ def main():
             weight2 = with_sharding_constraint(weight2, ('mlp', 'emb'))
             for i in range(100):
                 out = pjitted_test_fn(input, weight1, weight2)
-
-            start = datetime.datetime.now()
-            iteration = 5
-            for i in range(iteration):
-                out = pjitted_test_fn(input, weight1, weight2)
-            end = datetime.datetime.now()
-            delta = (end - start).total_seconds() * 1000 / iteration
-            print("Delta avg: {}".format(delta))
 
     return out
 
